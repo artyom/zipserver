@@ -22,6 +22,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Handler wraps *zip.Reader, providing HTTP access to its contents.
@@ -70,7 +71,9 @@ func Handler(z *zip.Reader) http.Handler {
 		w.Header().Set("Content-Type", conjureContentType(z.File[i]))
 		w.Header().Set("Content-Length", strconv.FormatUint(z.File[i].CompressedSize64, 10))
 		w.Header().Set("Content-Encoding", "deflate")
-		io.Copy(w, rd)
+		b := bufPool.Get().(*[]byte)
+		io.CopyBuffer(w, rd, *b)
+		bufPool.Put(b)
 	})
 }
 
@@ -86,4 +89,11 @@ func conjureContentType(zf *zip.File) string {
 	b := make([]byte, 512)
 	i, _ := rc.Read(b)
 	return http.DetectContentType(b[:i])
+}
+
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 32*1024)
+		return &b
+	},
 }

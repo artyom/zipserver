@@ -47,6 +47,23 @@ func TestHandler(t *testing.T) {
 	}
 }
 
+func BenchmarkHandler(b *testing.B) {
+	handler := zipserver.Handler(zipFile())
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/"+testFileName, nil)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			b.Fatalf("unexpected status: %s", resp.Status)
+		}
+		io.Copy(io.Discard, resp.Body)
+	}
+}
+
 const testFileName = "LICENSE.txt"
 
 func zipFile() *zip.Reader {
