@@ -16,15 +16,15 @@ package zipserver
 
 import (
 	"archive/zip"
+	"errors"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
-
-	"artyom.dev/zipserver/internal/memseek"
 )
 
 // Handler wraps *zip.Reader, providing HTTP access to its contents.
@@ -43,16 +43,16 @@ func Handler(z *zip.Reader) http.Handler {
 		return srv
 	}
 
-	// when content-type cannot be derived from the file name, http.ServeContent
+	// when content-type cannot be derived from the file name, http.serveContent
 	// reads a small buffer from the file to sniff the content type, and then tries
 	// to seek back to the start. zip.Reader files don't support seeking, so route
 	// all requests for which the content type cannot be detected purely from the
-	// file name to a fallback FS implementation, which makes fs.FS seekable by
-	// reading the requested file into memory.
-	srvMem := http.FileServer(http.FS(memseek.FS(z)))
+	// file name to a fallback FS implementation, which pretends its files to be
+	// seekable (only to the beginnig of the file) by re-opening the file.
+	srvSeek0 := http.FileServer(http.FS(seekableFS{z}))
 	fallbackServe := func(w http.ResponseWriter, r *http.Request) {
 		if mime.TypeByExtension(path.Ext(r.URL.Path)) == "" {
-			srvMem.ServeHTTP(w, r)
+			srvSeek0.ServeHTTP(w, r)
 			return
 		}
 		srv.ServeHTTP(w, r)
@@ -113,4 +113,38 @@ var bufPool = sync.Pool{
 		b := make([]byte, 32*1024)
 		return &b
 	},
+}
+
+type seekableFS struct{ *zip.Reader }
+
+func (s seekableFS) Open(name string) (fs.File, error) {
+	file, err := s.Reader.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &seekableFile{File: file, zr: s.Reader, name: name}, nil
+}
+
+// A seekableFile wraps a fs.File returned by zip.Reader.
+// This wrapper mimics a Seek method by re-opening a wrapped file,
+// which tricks callers expecting a working seek to the beginning of the file.
+type seekableFile struct {
+	fs.File
+	zr   *zip.Reader
+	name string
+}
+
+func (f *seekableFile) Seek(offset int64, whence int) (int64, error) {
+	if offset != 0 || whence != io.SeekStart {
+		return 0, errors.New("seekableFile does not support arbitrary seeks")
+	}
+	if err := f.File.Close(); err != nil {
+		return 0, err
+	}
+	file, err := f.zr.Open(f.name)
+	if err != nil {
+		return 0, err
+	}
+	f.File = file
+	return 0, nil
 }

@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"compress/flate"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"testing"
 
 	"artyom.dev/zipserver"
@@ -47,6 +49,40 @@ func TestHandler(t *testing.T) {
 	}
 }
 
+func TestHandler_seekableFile(t *testing.T) {
+	if ct := mime.TypeByExtension(path.Ext(testFileNoSuffix)); ct != "" {
+		t.Fatalf("got non-empty mime type for file named %q: %q", testFileNoSuffix, ct)
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/"+testFileNoSuffix, nil)
+	w := httptest.NewRecorder()
+	zipserver.Handler(zipFile()).ServeHTTP(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status: %s", resp.Status)
+	}
+	if s := resp.Header.Get("Vary"); s != "Accept-Encoding" {
+		t.Fatalf("unexpected Vary value: %q", s)
+	}
+	if s := resp.Header.Get("Content-Type"); s != "text/plain; charset=utf-8" {
+		t.Fatalf("unexpected Content-Type value: %q", s)
+	}
+	if resp.Uncompressed {
+		t.Fatal("got automatically uncompressed response")
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	want, err := os.ReadFile(testFileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("payloads differ (got %d bytes, want %d bytes)", len(got), len(want))
+	}
+}
+
 func BenchmarkHandler(b *testing.B) {
 	handler := zipserver.Handler(zipFile())
 	req := httptest.NewRequest(http.MethodGet, "http://localhost/"+testFileName, nil)
@@ -65,6 +101,7 @@ func BenchmarkHandler(b *testing.B) {
 }
 
 const testFileName = "LICENSE.txt"
+const testFileNoSuffix = "unknown"
 
 func zipFile() *zip.Reader {
 	buf := new(bytes.Buffer)
@@ -73,12 +110,14 @@ func zipFile() *zip.Reader {
 		panic(err)
 	}
 	zw := zip.NewWriter(buf)
-	w, err := zw.CreateHeader(&zip.FileHeader{Name: testFileName, Method: zip.Deflate})
-	if err != nil {
-		panic(err)
-	}
-	if _, err := w.Write(b); err != nil {
-		panic(err)
+	for _, name := range [...]string{testFileName, testFileNoSuffix} {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Deflate})
+		if err != nil {
+			panic(err)
+		}
+		if _, err := w.Write(b); err != nil {
+			panic(err)
+		}
 	}
 	if err := zw.Close(); err != nil {
 		panic(err)
