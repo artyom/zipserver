@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"artyom.dev/zipserver/internal/memseek"
 )
 
 // Handler wraps *zip.Reader, providing HTTP access to its contents.
@@ -41,6 +43,21 @@ func Handler(z *zip.Reader) http.Handler {
 		return srv
 	}
 
+	// when content-type cannot be derived from the file name, http.ServeContent
+	// reads a small buffer from the file to sniff the content type, and then tries
+	// to seek back to the start. zip.Reader files don't support seeking, so route
+	// all requests for which the content type cannot be detected purely from the
+	// file name to a fallback FS implementation, which makes fs.FS seekable by
+	// reading the requested file into memory.
+	srvMem := http.FileServer(http.FS(memseek.FS(z)))
+	fallbackServe := func(w http.ResponseWriter, r *http.Request) {
+		if mime.TypeByExtension(path.Ext(r.URL.Path)) == "" {
+			srvMem.ServeHTTP(w, r)
+			return
+		}
+		srv.ServeHTTP(w, r)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
 		w.Header().Set("Accept-Ranges", "none")
@@ -48,7 +65,7 @@ func Handler(z *zip.Reader) http.Handler {
 		if r.Method != http.MethodGet ||
 			r.Header.Get("Range") != "" ||
 			!strings.Contains(r.Header.Get("Accept-Encoding"), "deflate") {
-			srv.ServeHTTP(w, r)
+			fallbackServe(w, r)
 			return
 		}
 
@@ -58,13 +75,13 @@ func Handler(z *zip.Reader) http.Handler {
 		}
 		i, ok := m[key]
 		if !ok {
-			srv.ServeHTTP(w, r)
+			fallbackServe(w, r)
 			return
 		}
 
 		rd, err := z.File[i].OpenRaw()
 		if err != nil {
-			srv.ServeHTTP(w, r)
+			fallbackServe(w, r)
 			return
 		}
 
