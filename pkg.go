@@ -88,6 +88,7 @@ func Handler(z *zip.Reader) http.Handler {
 		w.Header().Set("Content-Type", conjureContentType(z.File[i]))
 		w.Header().Set("Content-Length", strconv.FormatUint(z.File[i].CompressedSize64, 10))
 		w.Header().Set("Content-Encoding", "deflate")
+		w.Header().Set("Last-Modified", z.File[i].Modified.UTC().Format(http.TimeFormat))
 		b := bufPool.Get().(*[]byte)
 		io.CopyBuffer(w, rd, *b)
 		bufPool.Put(b)
