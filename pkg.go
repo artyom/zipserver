@@ -70,8 +70,8 @@ func Handler(z *zip.Reader) http.Handler {
 		}
 
 		key := strings.TrimPrefix(r.URL.Path, "/")
-		if key == "" {
-			key = "index.html"
+		if key == "" || strings.HasSuffix(key, "/") {
+			key += "index.html"
 		}
 		i, ok := m[key]
 		if !ok {
