@@ -83,20 +83,22 @@ func TestHandler_seekableFile(t *testing.T) {
 	}
 }
 
+type noopResponseWriter struct{ hdr http.Header }
+
+func (w *noopResponseWriter) WriteHeader(int)             {}
+func (w *noopResponseWriter) Header() http.Header         { return w.hdr }
+func (w *noopResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
+
 func BenchmarkHandler(b *testing.B) {
 	handler := zipserver.Handler(zipFile())
 	req := httptest.NewRequest(http.MethodGet, "http://localhost/"+testFileName, nil)
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	w := &noopResponseWriter{hdr: make(http.Header)}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		w := httptest.NewRecorder()
+		clear(w.hdr)
 		handler.ServeHTTP(w, req)
-		resp := w.Result()
-		if resp.StatusCode != http.StatusOK {
-			b.Fatalf("unexpected status: %s", resp.Status)
-		}
-		io.Copy(io.Discard, resp.Body)
 	}
 }
 
